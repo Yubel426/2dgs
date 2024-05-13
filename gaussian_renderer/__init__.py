@@ -55,6 +55,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     means3D = pc.get_xyz
     means2D = screenspace_points
     opacity = pc.get_opacity
+    center_normals = pc.get_center_normal
+    normal_scalings = pc.get_normal_scaling
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -97,7 +99,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         opacities = opacity,
         scales = scales,
         rotations = rotations,
-        cov3D_precomp = cov3D_precomp
+        cov3D_precomp = cov3D_precomp,
+        center_normals = center_normals,
+        normal_scalings = normal_scalings
     )
     
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
