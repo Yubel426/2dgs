@@ -36,7 +36,7 @@ if not args.skip_training or not args.skip_rendering:
     args = parser.parse_args()
 
 if not args.skip_training:
-    common_args = " --quiet --eval --test_iterations -1"
+    common_args = " -r 2"
     for scene in tanks_and_temples_scenes:
         source = args.tnt_image + "/" + scene
         print("python train.py -s " + source + " -m " + args.output_path + "/" + scene + common_args)
@@ -47,7 +47,7 @@ if not args.skip_rendering:
     for scene in tanks_and_temples_scenes:
         all_sources.append(args.tnt_image + "/" + scene)
 
-    common_args = " --quiet --eval --skip_train"
+    common_args = " --skip_test --skip_train"
     for scene, source in zip(all_scenes, all_sources):
         print("python render.py --iteration 30000 -s " + source + " -m" + args.output_path + "/" + scene + common_args)
         os.system("python render.py --iteration 30000 -s " + source + " -m " + args.output_path + "/" + scene + common_args)

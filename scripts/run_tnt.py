@@ -16,7 +16,7 @@ factors = [2] * len(scenes)
 
 excluded_gpus = set([])
 
-output_dir = "exp_TNT/release"
+output_dir = "output"
 
 dry_run = False
 
