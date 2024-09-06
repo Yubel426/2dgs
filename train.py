@@ -22,18 +22,35 @@ from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from shader.model import MLPWithPE
+from multiprocessing import Pool, cpu_count
+import time
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+import concurrent.futures
+
+def get_model(index, models):
+    if index not in models:
+        models[index] = MLPWithPE(index=index).to("cuda")
+    return models[index]
+
+def process_index(args):
+    i, index, UV, shader_models = args
+    idx = index[i].item()
+    return shader_models[idx](UV[:, i].t())
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
+
+
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
+    shader_models = {}
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -68,10 +85,44 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        UV = render_pkg["UVAI"][0:2].view(2, -1) # 2 x N
+        A = render_pkg["UVAI"][2:3]
+        index = render_pkg["UVAI"][3:4].view(-1).long()
         
+        unique_params = set()
+        start = time.time()
+        for i in range(index.shape[0]):
+            idx = index[i].item()
+            shader_model = get_model(idx, shader_models)
+            unique_params.update(shader_model.parameters())
+        print("Time to get shader models: ", time.time() - start)
+        shader_optimizer = torch.optim.Adam(list(unique_params), lr=0.001)
+
+        img0 = torch.zeros_like(image).view(3, -1)
+        args_list = [(i, index, UV, shader_models) for i in range(index.shape[0])]
+        with Pool(processes=cpu_count()-1) as pool:
+            results = pool.map(process_index,args_list)
+
+        # 更新 img0
+        for i, result in enumerate(results):
+            img0[:, i] = result
+
+        # start = time.time()
+        # with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()-2) as executor:
+        #     results = list(executor.map(process_index, range(index.shape[0])))
+        # for i, result in enumerate(results):
+        #     img0[:, i] = result
+        # print("Time to get shader results: ", time.time() - start)
+        # for i in range(index.shape[0]):
+        #     idx = index[i].item()
+        #     img0[:, i] = shader_models[idx](UV[:, i].t())
+        img0 = img0.view(3, image.shape[1], image.shape[2])
+        
+        img = img0 * A + image * (1 - A)
+
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + 0.1 * l1_loss(img, gt_image)
         
         # regularization
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
@@ -123,21 +174,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
             # Densification
-            if iteration < opt.densify_until_iter:
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            # if iteration < opt.densify_until_iter:
+            #     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+            #     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+            #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+            #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+            #         gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
                 
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    gaussians.reset_opacity()
+            #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+            #         gaussians.reset_opacity()
 
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                shader_optimizer.step()
+                shader_optimizer.zero_grad(set_to_none = True)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))

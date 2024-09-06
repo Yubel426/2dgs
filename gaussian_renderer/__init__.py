@@ -94,7 +94,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = override_color
     
-    rendered_image, radii, allmap = rasterizer(
+    color_uva, radii, allmap = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
@@ -104,13 +104,15 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         rotations = rotations,
         cov3D_precomp = cov3D_precomp
     )
-    
+    rendered_image = color_uva[0:3] # remove alpha channel
+    rendered_UVAI = color_uva[3:7] # UVAI channels
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     rets =  {"render": rendered_image,
             "viewspace_points": means2D,
             "visibility_filter" : radii > 0,
             "radii": radii,
+            "UVAI": rendered_UVAI,
     }
 
 
