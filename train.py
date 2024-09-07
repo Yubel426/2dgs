@@ -20,6 +20,7 @@ from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
+from utils.render_utils import save_img_u8
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from shader.model import ParallelMLPWithPE
@@ -70,7 +71,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        # viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        viewpoint_cam = viewpoint_stack[0]
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -83,6 +85,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
+        _psnr = psnr(image, gt_image).mean().double()
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + 0.1 * l1_loss(img, gt_image)
         
         # regularization
@@ -102,6 +105,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         total_loss.backward()
 
         iter_end.record()
+        # save the image
+        if iteration % 100 == 0:
+            save_img_u8(image.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image" + str(iteration) + "_" + str(_psnr) + ".png"))
 
         with torch.no_grad():
             # Progress bar
