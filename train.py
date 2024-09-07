@@ -22,9 +22,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from shader.model import MLPWithPE
-from multiprocessing import Pool, cpu_count
-import time
+from shader.model import ParallelMLPWithPE
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -32,25 +30,16 @@ except ImportError:
     TENSORBOARD_FOUND = False
 import concurrent.futures
 
-def get_model(index, models):
-    if index not in models:
-        models[index] = MLPWithPE(index=index).to("cuda")
-    return models[index]
-
-def process_index(args):
-    i, index, UV, shader_models = args
-    idx = index[i].item()
-    return shader_models[idx](UV[:, i].t())
-
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
 
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
+    shader_models = ParallelMLPWithPE().cuda()
+    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.001)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
-    shader_models = {}
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -85,39 +74,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        UV = render_pkg["UVAI"][0:2].view(2, -1) # 2 x N
+        UV = render_pkg["UVAI"][0:2].view(2, -1).t() # (N, 2)
         A = render_pkg["UVAI"][2:3]
-        index = render_pkg["UVAI"][3:4].view(-1).long()
-        
-        unique_params = set()
-        start = time.time()
-        for i in range(index.shape[0]):
-            idx = index[i].item()
-            shader_model = get_model(idx, shader_models)
-            unique_params.update(shader_model.parameters())
-        print("Time to get shader models: ", time.time() - start)
-        shader_optimizer = torch.optim.Adam(list(unique_params), lr=0.001)
-
-        img0 = torch.zeros_like(image).view(3, -1)
-        args_list = [(i, index, UV, shader_models) for i in range(index.shape[0])]
-        with Pool(processes=cpu_count()-1) as pool:
-            results = pool.map(process_index,args_list)
-
-        # 更新 img0
-        for i, result in enumerate(results):
-            img0[:, i] = result
-
-        # start = time.time()
-        # with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()-2) as executor:
-        #     results = list(executor.map(process_index, range(index.shape[0])))
-        # for i, result in enumerate(results):
-        #     img0[:, i] = result
-        # print("Time to get shader results: ", time.time() - start)
-        # for i in range(index.shape[0]):
-        #     idx = index[i].item()
-        #     img0[:, i] = shader_models[idx](UV[:, i].t())
-        img0 = img0.view(3, image.shape[1], image.shape[2])
-        
+        index = render_pkg["UVAI"][3].view(-1).long()
+        out = shader_models(UV, index) # (N, 3)
+        img0 = out.view(image.shape)
         img = img0 * A + image * (1 - A)
 
         gt_image = viewpoint_cam.original_image.cuda()
