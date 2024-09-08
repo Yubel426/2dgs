@@ -55,7 +55,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         self.render_items = ['RGB', 'Alpha', 'Normal', 'Depth', 'Edge', 'Curvature']
-        self.num_pts = 1
+        self.num_pts = 100_000
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

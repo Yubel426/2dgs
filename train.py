@@ -29,15 +29,16 @@ try:
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
-import concurrent.futures
+import wandb
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
 
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
+    tb_writer = None
     gaussians = GaussianModel(dataset.sh_degree)
-    shader_models = ParallelMLPWithPE().cuda()
+    shader_models = ParallelMLPWithPE(num_mlps=dataset.num_pts).cuda()
     shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.001)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -65,8 +66,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            gaussians.oneupSHdegree()
+        # if iteration % 1000 == 0:
+        #     gaussians.oneupSHdegree()
 
         # Pick a random Camera
         if not viewpoint_stack:
@@ -84,24 +85,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         img = img0 * A + image * (1 - A)
 
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        psnr_tensor = psnr(image, gt_image).mean().double()
+        Ll1 = l1_loss(img, gt_image)
+        psnr_tensor = psnr(img, gt_image).mean().double()
         _psnr = f"{psnr_tensor.item():.4f}"
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + 0.1 * l1_loss(img, gt_image)
-        
-        # regularization
-        lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
-        lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(img, gt_image))
+        wandb.log({"PSNR": psnr_tensor, "loss": loss})
 
-        rend_dist = render_pkg["rend_dist"]
-        rend_normal  = render_pkg['rend_normal']
-        surf_normal = render_pkg['surf_normal']
-        normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
-        normal_loss = lambda_normal * (normal_error).mean()
-        dist_loss = lambda_dist * (rend_dist).mean()
+        # regularization
+        # lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
+        # lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+
+        # rend_dist = render_pkg["rend_dist"]
+        # rend_normal  = render_pkg['rend_normal']
+        # surf_normal = render_pkg['surf_normal']
+        # normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
+        # normal_loss = lambda_normal * (normal_error).mean()
+        # dist_loss = lambda_dist * (rend_dist).mean()
 
         # loss
-        total_loss = loss + dist_loss + normal_loss
+        total_loss = loss #+ dist_loss + normal_loss
         
         total_loss.backward()
 
@@ -113,16 +115,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
-            ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
+            # ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
+            # ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
 
 
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
-                    "distort": f"{ema_dist_for_log:.{5}f}",
-                    "normal": f"{ema_normal_for_log:.{5}f}",
-                    "Points": f"{len(gaussians.get_xyz)}"
+                    # "distort": f"{ema_dist_for_log:.{5}f}",
+                    # "normal": f"{ema_normal_for_log:.{5}f}",
+                    # "Points": f"{len(gaussians.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)
 
@@ -131,11 +133,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            if tb_writer is not None:
-                tb_writer.add_scalar('train_loss_patches/dist_loss', ema_dist_for_log, iteration)
-                tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
+            # if tb_writer is not None:
+            #     tb_writer.add_scalar('train_loss_patches/dist_loss', ema_dist_for_log, iteration)
+            #     tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
 
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+            # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -291,7 +293,23 @@ if __name__ == "__main__":
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="texturegs",
 
+        # track hyperparameters and run metadata
+        config={
+        "sence": os.path.basename(args.source_path),
+        "number_pts": args.num_pts,
+        "hidden_layers": "2, 64, 16, 3",
+        "densify": False,
+        "xyz_fix": True,
+        "img_fitting": True,
+        "positional_encoding": True,
+        "test": True,
+        },
+        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts"
+    )
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
@@ -299,3 +317,4 @@ if __name__ == "__main__":
 
     # All done
     print("\nTraining complete.")
+    wandb.finish()
