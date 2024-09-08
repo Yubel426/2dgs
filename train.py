@@ -38,7 +38,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     tb_writer = prepare_output_and_logger(dataset)
     tb_writer = None
     gaussians = GaussianModel(dataset.sh_degree)
-    shader_models = ParallelMLPWithPE(num_mlps=dataset.num_pts).cuda()
+    if pipe.local_alpha:
+        output_dim = 4
+    else:
+        output_dim = 3
+    shader_models = ParallelMLPWithPE(num_mlps=dataset.num_pts, output_dim=output_dim).cuda()
     shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.001)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -81,7 +85,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         A = render_pkg["UVAI"][2:3]
         index = render_pkg["UVAI"][3].view(-1).long()
         out = shader_models(UV, index) # (N, 3)
-        img0 = out.view(image.shape)
+        if pipe.local_alpha:
+            alpha = out[:, 3:4]
+            color = out[:, 0:3]
+            alpha = alpha.reshape(A.shape)
+            A = A * alpha
+            img0 = color.reshape(image.shape)
+        else:
+            img0 = out.reshape(image.shape)
         img = img0 * A + image * (1 - A)
 
         gt_image = viewpoint_cam.original_image.cuda()
@@ -307,8 +318,9 @@ if __name__ == "__main__":
         "img_fitting": True,
         "positional_encoding": True,
         "test": True,
+        "local_alpha": args.local_alpha,
         },
-        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts"
+        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts_xyzfix_local_alpha"
     )
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
