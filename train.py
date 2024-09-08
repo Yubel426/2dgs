@@ -121,7 +121,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_end.record()
         # save the image
         if iteration % 100 == 0:
-            save_img_u8(image.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image" + str(iteration) + "_" + str(_psnr) + ".png"))
+            save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image" + str(iteration) + "_" + str(_psnr) + ".png"))
 
         with torch.no_grad():
             # Progress bar
@@ -176,6 +176,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save((shader_models.state_dict(), iteration), scene.model_path + "/shader" + str(iteration) + ".pth")
 
         with torch.no_grad():        
             if network_gui.conn == None:
