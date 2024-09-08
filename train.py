@@ -85,7 +85,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        _psnr = psnr(image, gt_image).mean().double()
+        psnr_tensor = psnr(image, gt_image).mean().double()
+        _psnr = f"{psnr_tensor.item():.4f}"
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + 0.1 * l1_loss(img, gt_image)
         
         # regularization
