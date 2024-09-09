@@ -20,7 +20,7 @@ from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
-from utils.render_utils import save_img_u8
+from utils.render_utils import save_img_u8, save_img_f32
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from shader.model import ParallelMLPWithPE
@@ -80,7 +80,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack[0]
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        img1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         UV = render_pkg["UVAI"][0:2].view(2, -1).t() # (N, 2)
         A = render_pkg["UVAI"][2:3]
         index = render_pkg["UVAI"][3].view(-1).long()
@@ -90,17 +90,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             color = out[:, 0:3]
             alpha = alpha.reshape(A.shape)
             A = A * alpha
-            img0 = color.reshape(image.shape)
+            img0 = color.reshape(img1.shape)
         else:
-            img0 = out.reshape(image.shape)
-        img = img0 * A + image * (1 - A)
-
+            img0 = out.reshape(img1.shape)
+        img = img0 * A + img1 * (1 - A)
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(img, gt_image)
         psnr_tensor = psnr(img, gt_image).mean().double()
+        psnr_tensor_1 = psnr(img1, gt_image).mean().double()
+        psnr_tensor_0 = psnr(img0, gt_image).mean().double()
         _psnr = f"{psnr_tensor.item():.4f}"
+        _psnr_1 = f"{psnr_tensor_1.item():.4f}"
+        _psnr_0 = f"{psnr_tensor_0.item():.4f}"
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(img, gt_image))
-        wandb.log({"PSNR": psnr_tensor, "loss": loss})
+        wandb.log({"PSNR": psnr_tensor, "loss": loss, 
+                   "PSNR_1": psnr_tensor_1, "PSNR_0": psnr_tensor_0})
 
         # regularization
         # lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
@@ -121,8 +125,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_end.record()
         # save the image
         if iteration % 100 == 0:
-            save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image" + str(iteration) + "_" + str(_psnr) + ".png"))
-
+            save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image_" + str(iteration) + "_" + str(_psnr) + ".png"))
+            save_img_u8(img0.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image0_" + str(iteration) + "_" + str(_psnr_0) + ".png"))
+            save_img_u8(img1.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image1_" + str(iteration) + "_" + str(_psnr_1) + ".png"))
+            save_img_u8(A.squeeze().cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -321,7 +327,7 @@ if __name__ == "__main__":
         "test": True,
         "local_alpha": args.local_alpha,
         },
-        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts_xyzfix_globala"
+        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts"
     )
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
