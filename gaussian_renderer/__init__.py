@@ -116,45 +116,45 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     }
 
 
-    # additional regularizations
-    render_alpha = allmap[1:2]
+    # # additional regularizations
+    # render_alpha = allmap[1:2]
 
-    # get normal map
-    # transform normal from view space to world space
-    render_normal = allmap[2:5]
-    render_normal = (render_normal.permute(1,2,0) @ (viewpoint_camera.world_view_transform[:3,:3].T)).permute(2,0,1)
+    # # get normal map
+    # # transform normal from view space to world space
+    # render_normal = allmap[2:5]
+    # render_normal = (render_normal.permute(1,2,0) @ (viewpoint_camera.world_view_transform[:3,:3].T)).permute(2,0,1)
     
-    # get median depth map
-    render_depth_median = allmap[5:6]
-    render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
+    # # get median depth map
+    # render_depth_median = allmap[5:6]
+    # render_depth_median = torch.nan_to_num(render_depth_median, 0, 0)
 
-    # get expected depth map
-    render_depth_expected = allmap[0:1]
-    render_depth_expected = (render_depth_expected / render_alpha)
-    render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
+    # # get expected depth map
+    # render_depth_expected = allmap[0:1]
+    # render_depth_expected = (render_depth_expected / render_alpha)
+    # render_depth_expected = torch.nan_to_num(render_depth_expected, 0, 0)
     
-    # get depth distortion map
-    render_dist = allmap[6:7]
+    # # get depth distortion map
+    # render_dist = allmap[6:7]
 
-    # psedo surface attributes
-    # surf depth is either median or expected by setting depth_ratio to 1 or 0
-    # for bounded scene, use median depth, i.e., depth_ratio = 1; 
-    # for unbounded scene, use expected depth, i.e., depth_ration = 0, to reduce disk anliasing.
-    surf_depth = render_depth_expected * (1-pipe.depth_ratio) + (pipe.depth_ratio) * render_depth_median
+    # # psedo surface attributes
+    # # surf depth is either median or expected by setting depth_ratio to 1 or 0
+    # # for bounded scene, use median depth, i.e., depth_ratio = 1; 
+    # # for unbounded scene, use expected depth, i.e., depth_ration = 0, to reduce disk anliasing.
+    # surf_depth = render_depth_expected * (1-pipe.depth_ratio) + (pipe.depth_ratio) * render_depth_median
     
-    # assume the depth points form the 'surface' and generate psudo surface normal for regularizations.
-    surf_normal = depth_to_normal(viewpoint_camera, surf_depth)
-    surf_normal = surf_normal.permute(2,0,1)
-    # remember to multiply with accum_alpha since render_normal is unnormalized.
-    surf_normal = surf_normal * (render_alpha).detach()
+    # # assume the depth points form the 'surface' and generate psudo surface normal for regularizations.
+    # surf_normal = depth_to_normal(viewpoint_camera, surf_depth)
+    # surf_normal = surf_normal.permute(2,0,1)
+    # # remember to multiply with accum_alpha since render_normal is unnormalized.
+    # surf_normal = surf_normal * (render_alpha).detach()
 
 
-    rets.update({
-            'rend_alpha': render_alpha,
-            'rend_normal': render_normal,
-            'rend_dist': render_dist,
-            'surf_depth': surf_depth,
-            'surf_normal': surf_normal,
-    })
+    # rets.update({
+    #         'rend_alpha': render_alpha,
+    #         'rend_normal': render_normal,
+    #         'rend_dist': render_dist,
+    #         'surf_depth': surf_depth,
+    #         'surf_normal': surf_normal,
+    # })
 
     return rets

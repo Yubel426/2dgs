@@ -47,6 +47,13 @@ class ParallelMLPWithPE(nn.Module):
         self.fc2_bias = nn.Parameter(torch.randn(num_mlps, hidden_dim2))
         self.fc3_weight = nn.Parameter(torch.randn(num_mlps, hidden_dim2, output_dim))
         self.fc3_bias = nn.Parameter(torch.randn(num_mlps, output_dim))
+        # initialize weights and biases
+        nn.init.xavier_normal_(self.fc1_weight)
+        nn.init.xavier_normal_(self.fc2_weight)
+        nn.init.xavier_normal_(self.fc3_weight)
+        nn.init.zeros_(self.fc1_bias)
+        nn.init.zeros_(self.fc2_bias)
+        nn.init.zeros_(self.fc3_bias)
         self.pe = PositionalEncoding(num_freqs)
 
     def forward(self, x, mlp_indices):

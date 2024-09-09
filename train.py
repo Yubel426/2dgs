@@ -43,7 +43,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     else:
         output_dim = 3
     shader_models = ParallelMLPWithPE(num_mlps=dataset.num_pts, output_dim=output_dim).cuda()
-    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.001)
+    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.01)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -128,7 +128,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image_" + str(iteration) + "_" + str(_psnr) + ".png"))
             save_img_u8(img0.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image0_" + str(iteration) + "_" + str(_psnr_0) + ".png"))
             save_img_u8(img1.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image1_" + str(iteration) + "_" + str(_psnr_1) + ".png"))
-            save_img_u8(A.squeeze().cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
+            save_img_u8(A.squeeze().cpu().detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
