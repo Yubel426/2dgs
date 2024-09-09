@@ -84,6 +84,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         UV = render_pkg["UVAI"][0:2].view(2, -1).t() # (N, 2)
         A = render_pkg["UVAI"][2:3]
         index = render_pkg["UVAI"][3].view(-1).long()
+        #Todo: mask out the pixels that are A = 0
         out = shader_models(UV, index) # (N, 3)
         if pipe.local_alpha:
             alpha = out[:, 3:4]
@@ -171,7 +172,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
             #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
             #         gaussians.reset_opacity()
-
+            if iteration < opt.densify_until_iter:
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    prune_mask = gaussians.prune(opt.opacity_cull)
+                    shader_models.prune(prune_mask)
+                    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.01)
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
@@ -327,7 +332,7 @@ if __name__ == "__main__":
         "test": True,
         "local_alpha": args.local_alpha,
         },
-        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts"
+        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts_prune"
     )
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
