@@ -43,7 +43,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     else:
         output_dim = 3
     shader_models = ParallelMLPWithPE(num_mlps=dataset.num_pts, output_dim=output_dim).cuda()
-    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.01)
+    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -81,19 +81,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         img1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        UV = render_pkg["UVAI"][0:2].view(2, -1).t() # (N, 2)
-        A = render_pkg["UVAI"][2:3]
-        index = render_pkg["UVAI"][3].view(-1).long()
+        UV = render_pkg["UVAI"][0:2] # (2, W, H)
+        A = render_pkg["UVAI"][2:3]  # (1, W, H)
+        index = render_pkg["UVAI"][3:4] 
         #Todo: mask out the pixels that are A = 0
-        out = shader_models(UV, index) # (N, 3)
-        if pipe.local_alpha:
-            alpha = out[:, 3:4]
-            color = out[:, 0:3]
-            alpha = alpha.reshape(A.shape)
-            A = A * alpha
-            img0 = color.reshape(img1.shape)
+        mask = A > 0.1
+        if mask.any():
+            index = index[mask].view(-1).long()
+            UV = UV[mask.expand_as(UV)].view(2, -1).t() # (N, 2)
+
+            out = shader_models(UV, index) # (N, 3)
+            img0 = torch.zeros_like(img1)
+            if pipe.local_alpha:
+                alpha = out[:, 3:4]
+                color = out[:, 0:3]
+                alpha = alpha.reshape(A.shape)
+                A = A * alpha
+                img0 = color.reshape(img1.shape)
+            else:
+                img0[:,mask[0]] = out.t()
         else:
-            img0 = out.reshape(img1.shape)
+            img0 = torch.zeros_like(img1)
+            print("No valid pixels")
         img = img0 * A + img1 * (1 - A)
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(img, gt_image)
@@ -172,17 +181,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
             #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
             #         gaussians.reset_opacity()
-            if iteration < opt.densify_until_iter:
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    prune_mask = gaussians.prune(opt.opacity_cull)
-                    shader_models.prune(prune_mask)
-                    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.01)
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
                 shader_optimizer.step()
                 shader_optimizer.zero_grad(set_to_none = True)
+
+            if iteration < opt.densify_until_iter:
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    prune_mask = gaussians.prune(opt.opacity_cull)
+                    shader_models.prune(prune_mask)
+                    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
+
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))

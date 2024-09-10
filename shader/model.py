@@ -72,7 +72,7 @@ class ParallelMLPWithPE(nn.Module):
         x = torch.bmm(x, fc2_weight) + fc2_bias.unsqueeze(1)
         x = torch.bmm(x, fc3_weight) + fc3_bias.unsqueeze(1)
         
-        return torch.sigmoid(x).squeeze(1)
+        return F.sigmoid(x).squeeze(1)
     def prune(self, prune_mask):
         self.fc1_weight = nn.Parameter(self.fc1_weight[prune_mask])
         self.fc1_bias = nn.Parameter(self.fc1_bias[prune_mask])
@@ -81,6 +81,7 @@ class ParallelMLPWithPE(nn.Module):
         self.fc3_weight = nn.Parameter(self.fc3_weight[prune_mask])
         self.fc3_bias = nn.Parameter(self.fc3_bias[prune_mask])
         self.num_mlps = len(prune_mask)
+        print("Pruned to", self.num_mlps, "pts")
     
 
 

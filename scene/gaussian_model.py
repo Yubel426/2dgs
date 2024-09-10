@@ -409,7 +409,6 @@ class GaussianModel:
     def prune(self, min_opacity):
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         self.prune_points(prune_mask)
-        torch.cuda.empty_cache()
-
+        print("Pruned to", self.get_xyz.shape[0], "pts")
         return ~prune_mask
 
