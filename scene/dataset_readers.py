@@ -167,6 +167,20 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         except:
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
+    ply_path = os.path.join(path, "points3d.ply")
+    # if not os.path.exists(ply_path):
+    # Since this data set has no colmap data, we start with random points
+    num_pts = 5_000
+    print(f"Generating random point cloud ({num_pts})...")
+    
+    # We create random points inside the bounds of the synthetic Blender scenes
+    xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+    # xyz[:, 2] = 0
+    shs = np.random.random((num_pts, 3)) / 255.0
+    pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+    storePly(ply_path, xyz, SH2RGB(shs) * 255)
+
     try:
         pcd = fetchPly(ply_path)
     except:
@@ -241,6 +255,7 @@ def readNerfSyntheticInfo(path, white_background, eval, num_pts, extension=".png
     
     # We create random points inside the bounds of the synthetic Blender scenes
     xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+    xyz[:, 2] = 0
     shs = np.random.random((num_pts, 3)) / 255.0
     pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 

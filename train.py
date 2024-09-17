@@ -33,7 +33,6 @@ import wandb
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
 
-
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     tb_writer = None
@@ -43,7 +42,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     else:
         output_dim = 3
     shader_models = ParallelMLPWithPE(num_mlps=dataset.num_pts, output_dim=output_dim).cuda()
-    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
+    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.01)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -83,14 +82,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         img1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         UV = render_pkg["UVAI"][0:2] # (2, W, H)
         A = render_pkg["UVAI"][2:3]  # (1, W, H)
-        index = render_pkg["UVAI"][3:4] 
-        #Todo: mask out the pixels that are A = 0
-        mask = A > 0.1
+        index = render_pkg["UVAI"][3:4]
+        mask = A > 1. / 255
         if mask.any():
             index = index[mask].view(-1).long()
-            UV = UV[mask.expand_as(UV)].view(2, -1).t() # (N, 2)
+            UV = UV[mask.expand_as(UV)].view(2, -1).t()  # (N, 2)
 
-            out = shader_models(UV, index) # (N, 3)
+            out = shader_models(UV, index)  # (N, 3)
             img0 = torch.zeros_like(img1)
             if pipe.local_alpha:
                 alpha = out[:, 3:4]
@@ -99,11 +97,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 A = A * alpha
                 img0 = color.reshape(img1.shape)
             else:
-                img0[:,mask[0]] = out.t()
+                img0[:, mask[0]] = out.t()
         else:
             img0 = torch.zeros_like(img1)
             print("No valid pixels")
         img = img0 * A + img1 * (1 - A)
+        # img = img0
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(img, gt_image)
         psnr_tensor = psnr(img, gt_image).mean().double()
@@ -113,8 +112,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         _psnr_1 = f"{psnr_tensor_1.item():.4f}"
         _psnr_0 = f"{psnr_tensor_0.item():.4f}"
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(img, gt_image))
-        wandb.log({"PSNR": psnr_tensor, "loss": loss, 
-                   "PSNR_1": psnr_tensor_1, "PSNR_0": psnr_tensor_0})
+        # wandb.log({"PSNR": psnr_tensor, "loss": loss, 
+        #            "PSNR_1": psnr_tensor_1, "PSNR_0": psnr_tensor_0})
 
         # regularization
         # lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
@@ -134,6 +133,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
         # save the image
+        if iteration == 1:
+            save_img_u8(A.squeeze().cpu().detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
+
         if iteration % 100 == 0:
             save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image_" + str(iteration) + "_" + str(_psnr) + ".png"))
             save_img_u8(img0.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image0_" + str(iteration) + "_" + str(_psnr_0) + ".png"))
@@ -151,7 +153,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     "Loss": f"{ema_loss_for_log:.{5}f}",
                     # "distort": f"{ema_dist_for_log:.{5}f}",
                     # "normal": f"{ema_normal_for_log:.{5}f}",
-                    # "Points": f"{len(gaussians.get_xyz)}"
+                    "Points": f"{len(gaussians.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)
 
@@ -168,7 +170,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-
 
             # Densification
             # if iteration < opt.densify_until_iter:
@@ -188,19 +189,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 shader_optimizer.step()
                 shader_optimizer.zero_grad(set_to_none = True)
 
-            if iteration < opt.densify_until_iter:
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    prune_mask = gaussians.prune(opt.opacity_cull)
-                    shader_models.prune(prune_mask)
-                    shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
-
+            # if iteration < opt.densify_until_iter:
+            #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+            #         prune_mask = gaussians.prune(opt.opacity_cull)
+            #         shader_models.prune(prune_mask)
+            #         shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-                torch.save((shader_models.state_dict(), iteration), scene.model_path + "/shader" + str(iteration) + ".pth")
+                # torch.save((shader_models.state_dict(), iteration), scene.model_path + "/shader" + str(iteration) + ".pth")
 
-        with torch.no_grad():        
+        with torch.no_grad():      
             if network_gui.conn == None:
                 network_gui.try_connect(dataset.render_items)
             while network_gui.conn != None:
@@ -327,24 +327,24 @@ if __name__ == "__main__":
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
-    wandb.init(
-        # set the wandb project where this run will be logged
-        project="texturegs",
+    # wandb.init(
+    #     # set the wandb project where this run will be logged
+    #     project="texturegs",
 
-        # track hyperparameters and run metadata
-        config={
-        "sence": os.path.basename(args.source_path),
-        "number_pts": args.num_pts,
-        "hidden_layers": "2, 64, 16, 3",
-        "densify": False,
-        "xyz_fix": True,
-        "img_fitting": True,
-        "positional_encoding": True,
-        "test": True,
-        "local_alpha": args.local_alpha,
-        },
-        name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts_prune"
-    )
+    #     # track hyperparameters and run metadata
+    #     config={
+    #     "sence": os.path.basename(args.source_path),
+    #     "number_pts": args.num_pts,
+    #     "hidden_layers": "2, 64, 16, 3",
+    #     "densify": False,
+    #     "xyz_fix": True,
+    #     "img_fitting": True,
+    #     "positional_encoding": True,
+    #     "test": True,
+    #     "local_alpha": args.local_alpha,
+    #     },
+    #     name= os.path.basename(args.source_path) + "_PE_64_16_" + str(args.num_pts) + "pts_prune"
+    # )
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
@@ -352,4 +352,4 @@ if __name__ == "__main__":
 
     # All done
     print("\nTraining complete.")
-    wandb.finish()
+    # wandb.finish()
