@@ -69,26 +69,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
-        # if iteration % 1000 == 0:
-        #     gaussians.oneupSHdegree()
+        if iteration % 1000 == 0:
+            gaussians.oneupSHdegree()
 
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
-        # viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-        viewpoint_cam = viewpoint_stack[0]
-        
+            save = True
+        viewpoint_cam_index = randint(0, len(viewpoint_stack)-1)
+        viewpoint_cam = viewpoint_stack.pop(viewpoint_cam_index)
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         img1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         UV = render_pkg["UVAI"][0:2] # (2, W, H)
         A = render_pkg["UVAI"][2:3]  # (1, W, H)
         index = render_pkg["UVAI"][3:4]
         mask = A > 1. / 255
+        dir_pp = (gaussians.get_xyz - viewpoint_cam.camera_center.repeat(gaussians.get_xyz.shape[0], 1))
+        dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
         if mask.any():
             index = index[mask].view(-1).long()
             UV = UV[mask.expand_as(UV)].view(2, -1).t()  # (N, 2)
-
-            out = shader_models(UV, index)  # (N, 3)
+            dir = dir_pp_normalized[index]
+            out = shader_models(UV, index, dir)  # (N, 3)
             img0 = torch.zeros_like(img1)
             if pipe.local_alpha:
                 alpha = out[:, 3:4]
@@ -102,7 +104,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             img0 = torch.zeros_like(img1)
             print("No valid pixels")
         img = img0 * A + img1 * (1 - A)
-        # img = img0
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(img, gt_image)
         psnr_tensor = psnr(img, gt_image).mean().double()
@@ -136,7 +137,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration == 1:
             save_img_u8(A.squeeze().cpu().detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
 
-        if iteration % 100 == 0:
+        if viewpoint_cam_index == 0 and save:
+            save = False
             save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image_" + str(iteration) + "_" + str(_psnr) + ".png"))
             save_img_u8(img0.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image0_" + str(iteration) + "_" + str(_psnr_0) + ".png"))
             save_img_u8(img1.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image1_" + str(iteration) + "_" + str(_psnr_1) + ".png"))
@@ -146,7 +148,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             # ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             # ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
-
 
             if iteration % 10 == 0:
                 loss_dict = {
@@ -179,9 +180,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
             #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
             #         gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
-                
+
             #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
             #         gaussians.reset_opacity()
+
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
@@ -194,6 +196,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #         prune_mask = gaussians.prune(opt.opacity_cull)
             #         shader_models.prune(prune_mask)
             #         shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
+
+            #Todo: add densify
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
