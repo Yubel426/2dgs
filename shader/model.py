@@ -54,12 +54,13 @@ class ParallelMLPWithPE(nn.Module):
         hidden_dim2=16,
         output_dim=3,
         num_freqs=3,
+        num_freqs_dir=2,
         num_mlps=5000,
     ):
         super(ParallelMLPWithPE, self).__init__()
         self.num_mlps = num_mlps
         self.fc1_weight = nn.Parameter(
-            torch.randn(num_mlps, input_dim + input_dim * num_freqs * 2, hidden_dim)
+            torch.randn(num_mlps, input_dim + input_dim * num_freqs * 2 + num_freqs_dir * 6 + 3, hidden_dim)
         )
         self.fc1_bias = nn.Parameter(torch.randn(num_mlps, hidden_dim))
         self.fc2_weight = nn.Parameter(torch.randn(num_mlps, hidden_dim, hidden_dim2))
@@ -74,9 +75,13 @@ class ParallelMLPWithPE(nn.Module):
         nn.init.zeros_(self.fc2_bias)
         nn.init.zeros_(self.fc3_bias)
         self.pe = PositionalEncoding(num_freqs)
+        self.pe_dir = PositionalEncoding(num_freqs_dir)
 
-    def forward(self, x, mlp_indices):
+    def forward(self, x, mlp_indices, dir=None):
         x = self.pe(x)
+        if dir is not None:
+            dir = self.pe_dir(dir)
+            x = torch.cat([x, dir], dim=-1)
         # Select weights and biases based on mlp_indices
         fc1_weight = self.fc1_weight[mlp_indices]
         fc1_bias = self.fc1_bias[mlp_indices]
