@@ -134,10 +134,10 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
-        # cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
-        # cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
-        cam_extrinsics = read_one_extrinsics_binary(cameras_extrinsic_file)
-        cam_intrinsics = read_one_intrinsics_binary(cameras_intrinsic_file)
+        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
+        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+        # cam_extrinsics = read_one_extrinsics_binary(cameras_extrinsic_file)
+        # cam_intrinsics = read_one_intrinsics_binary(cameras_intrinsic_file)
     except:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
@@ -255,7 +255,6 @@ def readNerfSyntheticInfo(path, white_background, eval, num_pts, extension=".png
     
     # We create random points inside the bounds of the synthetic Blender scenes
     xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-    xyz[:, 2] = 0
     shs = np.random.random((num_pts, 3)) / 255.0
     pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
