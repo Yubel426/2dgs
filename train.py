@@ -76,8 +76,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             save = True
-        viewpoint_cam_index = randint(0, len(viewpoint_stack)-1)
-        viewpoint_cam = viewpoint_stack.pop(viewpoint_cam_index)
+        # viewpoint_cam_index = randint(0, len(viewpoint_stack)-1)
+        viewpoint_cam_index = 0
+        viewpoint_cam = viewpoint_stack[viewpoint_cam_index]
+        # viewpoint_cam = viewpoint_stack.pop(viewpoint_cam_index)
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         img1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         UV = render_pkg["UVAI"][0:2] # (2, W, H)
@@ -103,7 +105,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             img0 = torch.zeros_like(img1)
             print("No valid pixels")
-        img = img0 * A + img1 * (1 - A)
+        # img = img0 * A + img1 * (1 - A)
+        img = img0 * 0.5 + img1 * 0.5
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(img, gt_image)
         psnr_tensor = psnr(img, gt_image).mean().double()
@@ -137,8 +140,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration == 1:
             save_img_u8(A.squeeze().cpu().detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
 
-        if viewpoint_cam_index == 0 and save:
-            save = False
+        # if viewpoint_cam_index == 0 and save:
+        if iteration % 100 == 0:
+            # save = False
             save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image_" + str(iteration) + "_" + str(_psnr) + ".png"))
             save_img_u8(img0.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image0_" + str(iteration) + "_" + str(_psnr_0) + ".png"))
             save_img_u8(img1.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image1_" + str(iteration) + "_" + str(_psnr_1) + ".png"))
@@ -179,8 +183,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
             #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-            #         gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
-
+            #         prune_mask, split_mask = gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+            #         # shader_models.densify_and_clone(clone_mask)
+            #         shader_models.densify_and_split(split_mask)
+            #         shader_models.densify_and_prune(prune_mask)
+                    
             #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
             #         gaussians.reset_opacity()
 

@@ -60,12 +60,15 @@ class ParallelMLPWithPE(nn.Module):
         super(ParallelMLPWithPE, self).__init__()
         self.num_mlps = num_mlps
         self.fc1_weight = nn.Parameter(
-            torch.randn(num_mlps, input_dim + input_dim * num_freqs * 2 + num_freqs_dir * 6 + 3, hidden_dim)
+            torch.randn(num_mlps, input_dim + input_dim * num_freqs * 2, hidden_dim)
         )
+        # self.fc1_weight = nn.Parameter(
+        #     torch.randn(num_mlps, input_dim + input_dim * num_freqs * 2 + num_freqs_dir * 6 + 3, hidden_dim)
+        # )
         self.fc1_bias = nn.Parameter(torch.randn(num_mlps, hidden_dim))
         self.fc2_weight = nn.Parameter(torch.randn(num_mlps, hidden_dim, hidden_dim2))
         self.fc2_bias = nn.Parameter(torch.randn(num_mlps, hidden_dim2))
-        self.fc3_weight = nn.Parameter(torch.randn(num_mlps, hidden_dim2, output_dim))
+        self.fc3_weight = nn.Parameter(torch.randn(num_mlps, hidden_dim2 + num_freqs_dir * 6 + 3, output_dim))
         self.fc3_bias = nn.Parameter(torch.randn(num_mlps, output_dim))
         # initialize weights and biases
         nn.init.xavier_normal_(self.fc1_weight)
@@ -81,7 +84,7 @@ class ParallelMLPWithPE(nn.Module):
         x = self.pe(x)
         if dir is not None:
             dir = self.pe_dir(dir)
-            x = torch.cat([x, dir], dim=-1)
+            # x = torch.cat([x, dir], dim=-1)
         # Select weights and biases based on mlp_indices
         fc1_weight = self.fc1_weight[mlp_indices]
         fc1_bias = self.fc1_bias[mlp_indices]
@@ -95,18 +98,47 @@ class ParallelMLPWithPE(nn.Module):
         x = F.relu(x)
         x = torch.bmm(x, fc2_weight) + fc2_bias.unsqueeze(1)
         x = F.relu(x)
+        x = torch.cat([x, dir.unsqueeze(1)], dim=-1)
         x = torch.bmm(x, fc3_weight) + fc3_bias.unsqueeze(1)
         return F.sigmoid(x).squeeze(1)
 
-    def prune(self, prune_mask):
-        self.fc1_weight = nn.Parameter(self.fc1_weight[prune_mask])
-        self.fc1_bias = nn.Parameter(self.fc1_bias[prune_mask])
-        self.fc2_weight = nn.Parameter(self.fc2_weight[prune_mask])
-        self.fc2_bias = nn.Parameter(self.fc2_bias[prune_mask])
-        self.fc3_weight = nn.Parameter(self.fc3_weight[prune_mask])
-        self.fc3_bias = nn.Parameter(self.fc3_bias[prune_mask])
-        self.num_mlps = len(prune_mask)
-        print("Pruned to", self.num_mlps, "pts")
+    def densify_and_prune(self, prune_mask):
+        valid_points_mask = ~prune_mask
+        self.fc1_weight = nn.Parameter(self.fc1_weight[valid_points_mask])
+        self.fc1_bias = nn.Parameter(self.fc1_bias[valid_points_mask])
+        self.fc2_weight = nn.Parameter(self.fc2_weight[valid_points_mask])
+        self.fc2_bias = nn.Parameter(self.fc2_bias[valid_points_mask])
+        self.fc3_weight = nn.Parameter(self.fc3_weight[valid_points_mask])
+        self.fc3_bias = nn.Parameter(self.fc3_bias[valid_points_mask])
+   
+    def densify_and_split(self, mask):
+        new_fc1_weight = self.fc1_weight[mask].repeat(2, 1, 1)
+        new_fc1_bias = self.fc1_bias[mask].repeat(2, 1)
+        new_fc2_weight = self.fc2_weight[mask].repeat(2, 1, 1)
+        new_fc2_bias = self.fc2_bias[mask].repeat(2, 1)
+        new_fc3_weight = self.fc3_weight[mask].repeat(2, 1, 1)
+        new_fc3_bias = self.fc3_bias[mask].repeat(2, 1)
+        mask = ~mask
+        self.fc1_weight = nn.Parameter(torch.cat((self.fc1_weight[mask], new_fc1_weight), dim=0))
+        self.fc1_bias = nn.Parameter(torch.cat((self.fc1_bias[mask], new_fc1_bias), dim=0))
+        self.fc2_weight = nn.Parameter(torch.cat((self.fc2_weight[mask], new_fc2_weight), dim=0))
+        self.fc2_bias = nn.Parameter(torch.cat((self.fc2_bias[mask], new_fc2_bias), dim=0))
+        self.fc3_weight = nn.Parameter(torch.cat((self.fc3_weight[mask], new_fc3_weight), dim=0))
+        self.fc3_bias = nn.Parameter(torch.cat((self.fc3_bias[mask], new_fc3_bias), dim=0))
+
+    def densify_and_clone(self, mask):
+        new_fc1_weight = self.fc1_weight[mask]
+        new_fc1_bias = self.fc1_bias[mask]
+        new_fc2_weight = self.fc2_weight[mask]
+        new_fc2_bias = self.fc2_bias[mask]
+        new_fc3_weight = self.fc3_weight[mask]
+        new_fc3_bias = self.fc3_bias[mask]
+        self.fc1_weight = nn.Parameter(torch.cat((self.fc1_weight, new_fc1_weight), dim=0))
+        self.fc1_bias = nn.Parameter(torch.cat((self.fc1_bias, new_fc1_bias), dim=0))
+        self.fc2_weight = nn.Parameter(torch.cat((self.fc2_weight, new_fc2_weight), dim=0))
+        self.fc2_bias = nn.Parameter(torch.cat((self.fc2_bias, new_fc2_bias), dim=0))
+        self.fc3_weight = nn.Parameter(torch.cat((self.fc3_weight, new_fc3_weight), dim=0))
+        self.fc3_bias = nn.Parameter(torch.cat((self.fc3_bias, new_fc3_bias), dim=0))
 
 
 def save_img_u8(img, pth):
