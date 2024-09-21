@@ -31,6 +31,7 @@ except ImportError:
     TENSORBOARD_FOUND = False
 import wandb
 
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint):
 
     first_iter = 0
@@ -76,10 +77,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             save = True
-        # viewpoint_cam_index = randint(0, len(viewpoint_stack)-1)
-        viewpoint_cam_index = 0
-        viewpoint_cam = viewpoint_stack[viewpoint_cam_index]
-        # viewpoint_cam = viewpoint_stack.pop(viewpoint_cam_index)
+        if pipe.img_fitting:
+            viewpoint_cam_index = 0
+            viewpoint_cam = viewpoint_stack[viewpoint_cam_index]
+        else:
+            viewpoint_cam_index = randint(0, len(viewpoint_stack)-1)
+            viewpoint_cam = viewpoint_stack.pop(viewpoint_cam_index)
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         img1, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         UV = render_pkg["UVAI"][0:2] # (2, W, H)
@@ -99,7 +102,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 color = out[:, 0:3]
                 alpha = alpha.reshape(A.shape)
                 A = A * alpha
-                img0 = color.reshape(img1.shape)
+                img0[:, mask[0]] = color.t()
             else:
                 img0[:, mask[0]] = out.t()
         else:
@@ -120,19 +123,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         #            "PSNR_1": psnr_tensor_1, "PSNR_0": psnr_tensor_0})
 
         # regularization
-        # lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
-        # lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+        lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
+        lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
 
-        # rend_dist = render_pkg["rend_dist"]
-        # rend_normal  = render_pkg['rend_normal']
-        # surf_normal = render_pkg['surf_normal']
-        # normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
-        # normal_loss = lambda_normal * (normal_error).mean()
-        # dist_loss = lambda_dist * (rend_dist).mean()
+        rend_dist = render_pkg["rend_dist"]
+        rend_normal = render_pkg['rend_normal']
+        surf_normal = render_pkg['surf_normal']
+        normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
+        normal_loss = lambda_normal * (normal_error).mean()
+        dist_loss = lambda_dist * (rend_dist).mean()
 
         # loss
-        total_loss = loss #+ dist_loss + normal_loss
-        
+        total_loss = loss + dist_loss + normal_loss
         total_loss.backward()
 
         iter_end.record()
@@ -140,9 +142,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration == 1:
             save_img_u8(A.squeeze().cpu().detach().numpy(), os.path.join(scene.model_path + "/alpha_" + str(iteration) + ".png"))
 
-        # if viewpoint_cam_index == 0 and save:
-        if iteration % 100 == 0:
-            # save = False
+        if (viewpoint_cam_index == 0 and save and pipe.img_fitting) or (iteration % 100 == 0 and not pipe.img_fitting):
+            save = False
             save_img_u8(img.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image_" + str(iteration) + "_" + str(_psnr) + ".png"))
             save_img_u8(img0.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image0_" + str(iteration) + "_" + str(_psnr_0) + ".png"))
             save_img_u8(img1.cpu().permute(1,2,0).detach().numpy(), os.path.join(scene.model_path + "/image1_" + str(iteration) + "_" + str(_psnr_1) + ".png"))
@@ -150,14 +151,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            # ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
-            # ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
+            ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
+            ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
 
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
-                    # "distort": f"{ema_dist_for_log:.{5}f}",
-                    # "normal": f"{ema_normal_for_log:.{5}f}",
+                    "distort": f"{ema_dist_for_log:.{5}f}",
+                    "normal": f"{ema_normal_for_log:.{5}f}",
                     "Points": f"{len(gaussians.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)
@@ -177,19 +178,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scene.save(iteration)
 
             # Densification
-            # if iteration < opt.densify_until_iter:
-            #     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-            #     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            if iteration < opt.densify_until_iter:
+                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-            #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-            #         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-            #         prune_mask, split_mask = gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
-            #         # shader_models.densify_and_clone(clone_mask)
-            #         shader_models.densify_and_split(split_mask)
-            #         shader_models.densify_and_prune(prune_mask)
-                    
-            #     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-            #         gaussians.reset_opacity()
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    if gaussians.get_xyz.shape[0] < opt.max_num_points:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        prune_mask, split_mask, clone_mask = gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+                        shader_models.densify_and_clone(clone_mask)
+                        shader_models.densify_and_split(split_mask)
+                        shader_models.densify_and_prune(prune_mask)
+                        shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
+                    else:
+                        prune_mask = gaussians.prune(opt.opacity_cull)
+                        shader_models.prune(prune_mask)
+                        shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
+
+                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                    gaussians.reset_opacity()
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -198,27 +205,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 shader_optimizer.step()
                 shader_optimizer.zero_grad(set_to_none = True)
 
-            # if iteration < opt.densify_until_iter:
-            #     if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-            #         prune_mask = gaussians.prune(opt.opacity_cull)
-            #         shader_models.prune(prune_mask)
-            #         shader_optimizer = torch.optim.Adam(shader_models.parameters(), lr=0.1)
-
-            #Todo: add densify
-
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
                 # torch.save((shader_models.state_dict(), iteration), scene.model_path + "/shader" + str(iteration) + ".pth")
 
-        with torch.no_grad():      
-            if network_gui.conn == None:
+        with torch.no_grad():
+            if network_gui.conn is None:
                 network_gui.try_connect(dataset.render_items)
-            while network_gui.conn != None:
+            while network_gui.conn is not None:
                 try:
                     net_image_bytes = None
                     custom_cam, do_training, keep_alive, scaling_modifer, render_mode = network_gui.receive()
-                    if custom_cam != None:
+                    if custom_cam is not None:
                         render_pkg = render(custom_cam, gaussians, pipe, background, scaling_modifer)   
                         net_image = render_net_image(render_pkg, dataset.render_items, render_mode, custom_cam)
                         net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
@@ -235,14 +234,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # raise e
                     network_gui.conn = None
 
-def prepare_output_and_logger(args):    
+
+def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
-            unique_str=os.getenv('OAR_JOB_ID')
+            unique_str = os.getenv('OAR_JOB_ID')
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
@@ -333,7 +333,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
-    
+
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
